@@ -1,0 +1,17 @@
+# Secrets: the logged-in Telegram account session.
+*.session
+*.session-journal
+
+# Downloaded music.
+music/
+
+# Local Python environments, caches and build output.
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+
+.DS_Store
