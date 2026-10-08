@@ -1,4 +1,5 @@
-"""Decides which kind of downloadable media a message carries."""
+"""Decides which kind of downloadable media a message carries and what to name its file."""
+import os
 
 AUDIO = "audio"
 VOICE = "voice"
@@ -25,3 +26,16 @@ def media_type(message):
     if message.video and not message.video_note and not message.gif:
         return VIDEO
     return None
+
+
+def file_name(message):
+    """Returns a safe file name for the message's media.
+
+    Uses the name the sender gave the file, cut down to its last path part so a
+    crafted name cannot write outside the output folder, and falls back to the
+    message ID plus the media's extension.
+    """
+    name = os.path.basename((message.file.name or "").replace("\\", "/")).strip()
+    if name in ("", ".", ".."):
+        name = f"{message.id}{message.file.ext or ''}"
+    return name

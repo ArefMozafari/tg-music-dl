@@ -8,8 +8,10 @@ from pathlib import Path
 from telethon import TelegramClient, utils
 
 from tg_music_dl import __version__
-from tg_music_dl.media import AUDIO, MEDIA_TYPES, media_type
+from tg_music_dl.downloader import download_channel
+from tg_music_dl.media import AUDIO, MEDIA_TYPES
 from tg_music_dl.proxy import parse_proxy
+from tg_music_dl.state import STATE_FILE_NAME, DownloadState
 
 API_ID_VARIABLE = "TELEGRAM_API_ID"
 API_HASH_VARIABLE = "TELEGRAM_API_HASH"
@@ -20,9 +22,6 @@ DEFAULT_OUTPUT = "music"
 # config folder rather than wherever the command happens to run.
 DEFAULT_SESSION = (
     Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "tg-music-dl" / "session")
-# Lists what was already downloaded into the output folder, one entry per line.
-DOWNLOADED_LIST_NAME = "downloaded.txt"
-BYTES_PER_MEGABYTE = 1024 * 1024
 USAGE_ERROR = 2
 INTERRUPTED = 130
 
@@ -88,57 +87,13 @@ def parse_args(argv):
     return parser.parse_args(argv)
 
 
-def print_progress(received, total):
-    """Prints download progress in place: percentage and size when the total is known."""
-    received_megabytes = received / BYTES_PER_MEGABYTE
-    if total:
-        total_megabytes = total / BYTES_PER_MEGABYTE
-        print(f"\r  {100 * received / total:.1f}% ({received_megabytes:.2f} / {total_megabytes:.2f} MB)",
-              end="", flush=True)
-    else:
-        print(f"\r  {received_megabytes:.2f} MB", end="", flush=True)
-
-
-async def download_channel(client, entity, output, limit, types, downloaded_files):
-    """Downloads up to `limit` new files of the given media types from one channel, newest first.
-
-    Adds each finished file's key to `downloaded_files` and returns how many
-    files were downloaded.
-    """
-    downloaded_count = 0
-    async for message in client.iter_messages(entity):
-        if downloaded_count >= limit:
-            break
-        # Skips messages without media of a requested type, such as photos and other files.
-        if media_type(message) not in types:
-            continue
-        media = message.document
-        file_name = getattr(media, "file_name", None) or getattr(media, "name", None)
-        if not file_name:
-            file_name = f"{message.id}.ogg"
-        if file_name in downloaded_files:
-            print("Already downloaded:", file_name)
-            continue
-        print("Downloading:", file_name)
-        await client.download_media(message, output, progress_callback=print_progress)
-        # Ends the progress line.
-        print()
-        downloaded_files.add(file_name)
-        downloaded_count += 1
-    return downloaded_count
-
-
 async def download_all(args, api_id, api_hash, proxy):
     """Downloads from every channel in turn and returns how many channels could not be found."""
     os.makedirs(args.output, exist_ok=True)
     session_folder = os.path.dirname(args.session)
     if session_folder:
         os.makedirs(session_folder, mode=0o700, exist_ok=True)
-    downloaded_list = os.path.join(args.output, DOWNLOADED_LIST_NAME)
-    downloaded_files = set()
-    if os.path.exists(downloaded_list):
-        with open(downloaded_list) as list_file:
-            downloaded_files = set(list_file.read().splitlines())
+    state = DownloadState(os.path.join(args.output, STATE_FILE_NAME))
     failures = 0
     client = TelegramClient(args.session, api_id, api_hash, proxy=proxy)
     await client.connect()
@@ -150,24 +105,18 @@ async def download_all(args, api_id, api_hash, proxy):
             if not sys.stdin.isatty():
                 raise ConfigError("not logged in; run tg-music-dl once in a terminal to log in")
             await client.start()
-        try:
-            for channel in args.channels:
-                try:
-                    entity = await client.get_entity(channel)
-                except ValueError as error:
-                    print(f"Skipping {channel}: {error}", file=sys.stderr)
-                    failures += 1
-                    continue
-                title = utils.get_display_name(entity) or channel
-                print(f"== {title}")
-                count = await download_channel(client, entity, args.output, args.limit, args.types,
-                                               downloaded_files)
-                print(f"{count} new {'file' if count == 1 else 'files'} from {title}.")
-        finally:
-            # Saved even when a run is interrupted, so finished files are not fetched again.
-            with open(downloaded_list, "w") as list_file:
-                for file_name in sorted(downloaded_files):
-                    list_file.write(file_name + "\n")
+        for channel in args.channels:
+            try:
+                entity = await client.get_entity(channel)
+            except ValueError as error:
+                print(f"Skipping {channel}: {error}", file=sys.stderr)
+                failures += 1
+                continue
+            title = utils.get_display_name(entity) or channel
+            print(f"== {title}")
+            count = await download_channel(client, entity, str(utils.get_peer_id(entity)), args.output,
+                                           args.limit, args.types, state)
+            print(f"{count} new {'file' if count == 1 else 'files'} from {title}.")
     finally:
         await client.disconnect()
     return failures
@@ -188,6 +137,6 @@ def main(argv=None):
         print(f"tg-music-dl: {error}", file=sys.stderr)
         return USAGE_ERROR
     except KeyboardInterrupt:
-        print("\nStopped.", file=sys.stderr)
+        print("\nStopped. Finished files are kept; the next run picks up from here.", file=sys.stderr)
         return INTERRUPTED
     return 1 if failures else 0

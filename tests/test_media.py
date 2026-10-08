@@ -1,7 +1,9 @@
 """Tests for src/tg_music_dl/media.py."""
 from types import SimpleNamespace
 
-from tg_music_dl.media import AUDIO, VIDEO, VOICE, media_type
+import pytest
+
+from tg_music_dl.media import AUDIO, VIDEO, VOICE, file_name, media_type
 
 DOCUMENT = object()
 
@@ -47,3 +49,24 @@ class TestMediaType:
 
         assert media_type(pdf) is None
         assert media_type(make_message()) is None
+
+
+def make_file_message(name, ext=".mp3", message_id=42):
+    """Builds a stand-in message whose media has the given file name and extension."""
+    return SimpleNamespace(id=message_id, file=SimpleNamespace(name=name, ext=ext))
+
+
+class TestFileName:
+    def test_should_use_the_name_the_sender_gave(self):
+        assert file_name(make_file_message("01 Artist - Song.mp3")) == "01 Artist - Song.mp3"
+
+    @pytest.mark.parametrize("crafted", ["../../escape.mp3", "/etc/escape.mp3", "..\\escape.mp3"])
+    def test_should_keep_only_the_last_part_of_a_path(self, crafted):
+        assert file_name(make_file_message(crafted)) == "escape.mp3"
+
+    @pytest.mark.parametrize("unusable", [None, "", "  ", "..", "folder/"])
+    def test_should_fall_back_to_the_message_id_and_extension(self, unusable):
+        assert file_name(make_file_message(unusable)) == "42.mp3"
+
+    def test_should_fall_back_to_the_bare_message_id_without_an_extension(self):
+        assert file_name(make_file_message(None, ext=None)) == "42"
