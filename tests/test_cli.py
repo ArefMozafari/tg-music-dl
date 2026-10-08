@@ -1,4 +1,6 @@
 """Tests for src/tg_music_dl/cli.py."""
+import argparse
+
 import pytest
 
 from tg_music_dl import cli
@@ -43,6 +45,19 @@ class TestProxySetting:
         assert cli.proxy_setting(None, {}) is None
 
 
+class TestParseTypes:
+    def test_should_split_a_comma_separated_list(self):
+        assert cli.parse_types("audio, voice") == {"audio", "voice"}
+
+    def test_should_reject_an_unknown_type(self):
+        with pytest.raises(argparse.ArgumentTypeError, match="audio, voice, video"):
+            cli.parse_types("audio,photo")
+
+    def test_should_reject_an_empty_list(self):
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_types(" , ")
+
+
 class TestParseArgs:
     def test_should_use_the_defaults(self):
         args = cli.parse_args(["some_channel"])
@@ -50,8 +65,14 @@ class TestParseArgs:
         assert args.channels == ["some_channel"]
         assert args.limit == 20
         assert args.output == "music"
+        assert args.types == {"audio"}
         assert args.proxy is None
         assert args.session == str(cli.DEFAULT_SESSION)
+
+    def test_should_accept_media_types(self):
+        args = cli.parse_args(["some_channel", "--types", "audio,video"])
+
+        assert args.types == {"audio", "video"}
 
     def test_should_accept_several_channels_and_options(self):
         args = cli.parse_args([

@@ -8,6 +8,7 @@ from pathlib import Path
 from telethon import TelegramClient, utils
 
 from tg_music_dl import __version__
+from tg_music_dl.media import AUDIO, MEDIA_TYPES, media_type
 from tg_music_dl.proxy import parse_proxy
 
 API_ID_VARIABLE = "TELEGRAM_API_ID"
@@ -21,7 +22,6 @@ DEFAULT_SESSION = (
     Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "tg-music-dl" / "session")
 # Lists what was already downloaded into the output folder, one entry per line.
 DOWNLOADED_LIST_NAME = "downloaded.txt"
-AUDIO_MIME_PREFIX = "audio/"
 BYTES_PER_MEGABYTE = 1024 * 1024
 USAGE_ERROR = 2
 INTERRUPTED = 130
@@ -50,6 +50,14 @@ def proxy_setting(flag_value, environment):
     return flag_value or environment.get(PROXY_VARIABLE) or None
 
 
+def parse_types(value):
+    """Parses a comma-separated list of media types for argparse."""
+    types = {item.strip() for item in value.split(",") if item.strip()}
+    if not types or not types <= set(MEDIA_TYPES):
+        raise argparse.ArgumentTypeError(f"choose from {', '.join(MEDIA_TYPES)}")
+    return types
+
+
 def positive_int(value):
     """Parses a whole number of at least 1 for argparse."""
     number = int(value)
@@ -69,6 +77,8 @@ def parse_args(argv):
                         help="most new files per channel per run (default: %(default)s)")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT,
                         help="folder to save into (default: %(default)s)")
+    parser.add_argument("-t", "--types", type=parse_types, default={AUDIO},
+                        help=f"comma-separated media types: {', '.join(MEDIA_TYPES)} (default: {AUDIO})")
     parser.add_argument("--proxy",
                         help="socks5://host:port, socks4://host:port or http://host:port"
                              f" (default: ${PROXY_VARIABLE}, otherwise a direct connection)")
@@ -89,18 +99,8 @@ def print_progress(received, total):
         print(f"\r  {received_megabytes:.2f} MB", end="", flush=True)
 
 
-def audio_media(message):
-    """Returns the message's audio file, including audio sent as a plain document, or None."""
-    if message.audio:
-        return message.audio
-    document = message.document
-    if document is not None and (getattr(document, "mime_type", None) or "").startswith(AUDIO_MIME_PREFIX):
-        return document
-    return None
-
-
-async def download_channel(client, entity, output, limit, downloaded_files):
-    """Downloads up to `limit` new audio files from one channel, newest first.
+async def download_channel(client, entity, output, limit, types, downloaded_files):
+    """Downloads up to `limit` new files of the given media types from one channel, newest first.
 
     Adds each finished file's key to `downloaded_files` and returns how many
     files were downloaded.
@@ -109,10 +109,10 @@ async def download_channel(client, entity, output, limit, downloaded_files):
     async for message in client.iter_messages(entity):
         if downloaded_count >= limit:
             break
-        media = audio_media(message)
-        # Skips anything that is not audio, such as photos, videos and other files.
-        if not media:
+        # Skips messages without media of a requested type, such as photos and other files.
+        if media_type(message) not in types:
             continue
+        media = message.document
         file_name = getattr(media, "file_name", None) or getattr(media, "name", None)
         if not file_name:
             file_name = f"{message.id}.ogg"
@@ -160,7 +160,8 @@ async def download_all(args, api_id, api_hash, proxy):
                     continue
                 title = utils.get_display_name(entity) or channel
                 print(f"== {title}")
-                count = await download_channel(client, entity, args.output, args.limit, downloaded_files)
+                count = await download_channel(client, entity, args.output, args.limit, args.types,
+                                               downloaded_files)
                 print(f"{count} new {'file' if count == 1 else 'files'} from {title}.")
         finally:
             # Saved even when a run is interrupted, so finished files are not fetched again.
